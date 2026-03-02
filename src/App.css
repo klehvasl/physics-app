@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;600&display=swap');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #0d0d1a;
+  font-family: 'Nunito', sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+#root,
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+}
+
+header {
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-family: 'Fredoka One', cursive;
+  font-size: 1.4rem;
+  color: #fff;
+  letter-spacing: 1px;
+  text-shadow: 0 0 20px rgba(120, 200, 255, 0.5);
+  white-space: nowrap;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn {
+  font-family: 'Fredoka One', cursive;
+  font-size: 0.85rem;
+  padding: 5px 13px;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: transform 0.1s;
+  white-space: nowrap;
+}
+
+.btn:active {
+  transform: scale(0.95);
+}
+
+.btn-rain {
+  background: linear-gradient(135deg, #4fc3f7, #0288d1);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(79, 195, 247, 0.4);
+}
+
+.btn-clear {
+  background: linear-gradient(135deg, #ef9a9a, #e53935);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(229, 57, 53, 0.4);
+}
+
+.btn-chaos {
+  background: linear-gradient(135deg, #ce93d8, #7b1fa2);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(123, 31, 162, 0.4);
+}
+
+.btn-ragdoll {
+  background: linear-gradient(135deg, #ffcc80, #e65100);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 152, 0, 0.5);
+}
+
+label {
+  color: #aaa;
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+input[type='range'] {
+  width: 70px;
+  accent-color: #4fc3f7;
+}
+
+canvas {
+  display: block;
+  cursor: crosshair;
+}
+
+.hint {
+  position: fixed;
+  bottom: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.72rem;
+  pointer-events: none;
+  text-align: center;
+}
