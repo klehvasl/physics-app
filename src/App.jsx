@@ -2,6 +2,266 @@ import { useEffect, useRef } from 'react'
 import './App.css'
 
 const BALL_COLORS = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#c77dff', '#ff9a3c', '#00d4ff', '#ff61a6', '#a0f0b0']
+const PEG_SCALE = [261.63, 293.66, 329.63, 392, 440, 523.25, 587.33, 659.25]
+
+class PegAudioEngine {
+  constructor() {
+    this.audioContext = null
+    this.masterGain = null
+    this.compressor = null
+    this.pendingHits = []
+    this.noteTokens = 1
+    this.maxNotesPerSecond = 14
+    this.maxVoices = 4
+    this.activeVoices = 0
+    this.lastTick = performance.now()
+    this.sequenceStep = 0
+  }
+
+  init() {
+    if (this.audioContext) {
+      return
+    }
+
+    const context = new window.AudioContext()
+    const compressor = context.createDynamicsCompressor()
+    compressor.threshold.value = -22
+    compressor.knee.value = 20
+    compressor.ratio.value = 10
+    compressor.attack.value = 0.003
+    compressor.release.value = 0.2
+
+    const masterGain = context.createGain()
+    masterGain.gain.value = 0.22
+
+    masterGain.connect(compressor)
+    compressor.connect(context.destination)
+
+    this.audioContext = context
+    this.masterGain = masterGain
+    this.compressor = compressor
+  }
+
+  unlock() {
+    this.init()
+    if (this.audioContext?.state === 'suspended') {
+      void this.audioContext.resume()
+    }
+  }
+
+  registerHit(x, intensity) {
+    if (!this.audioContext) {
+      return
+    }
+
+    this.pendingHits.push({
+      x,
+      intensity: Math.max(0.1, Math.min(1, intensity)),
+      at: performance.now(),
+    })
+  }
+
+  chooseHit() {
+    if (this.pendingHits.length === 0) {
+      return null
+    }
+
+    let bestIndex = 0
+    for (let index = 1; index < this.pendingHits.length; index += 1) {
+      if (this.pendingHits[index].intensity > this.pendingHits[bestIndex].intensity) {
+        bestIndex = index
+      }
+    }
+
+    const [best] = this.pendingHits.splice(bestIndex, 1)
+    return best
+  }
+
+  playHit(hit, canvasWidth) {
+    if (!this.audioContext || !this.masterGain || this.activeVoices >= this.maxVoices) {
+      return
+    }
+
+    const now = this.audioContext.currentTime
+    const normalizedX = Math.max(0, Math.min(0.999, hit.x / Math.max(canvasWidth, 1)))
+    const baseIndex = Math.floor(normalizedX * PEG_SCALE.length)
+    const noteIndex = (baseIndex + this.sequenceStep) % PEG_SCALE.length
+    this.sequenceStep = (this.sequenceStep + 1) % PEG_SCALE.length
+    const frequency = PEG_SCALE[noteIndex]
+
+    const voiceGain = this.audioContext.createGain()
+    const tone = this.audioContext.createOscillator()
+    const shimmer = this.audioContext.createOscillator()
+    const filter = this.audioContext.createBiquadFilter()
+
+    const velocity = hit.intensity
+    const peak = 0.03 + velocity * 0.08
+    const duration = 0.11 + velocity * 0.14
+
+    filter.type = 'lowpass'
+    filter.frequency.value = 1800 + velocity * 2200
+    filter.Q.value = 0.9
+
+    tone.type = 'triangle'
+    tone.frequency.setValueAtTime(frequency, now)
+    shimmer.type = 'sine'
+    shimmer.frequency.setValueAtTime(frequency * 2, now)
+
+    voiceGain.gain.setValueAtTime(0.0001, now)
+    voiceGain.gain.exponentialRampToValueAtTime(peak, now + 0.01)
+    voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + duration)
+
+    tone.connect(filter)
+    shimmer.connect(filter)
+    filter.connect(voiceGain)
+    voiceGain.connect(this.masterGain)
+
+    this.activeVoices += 1
+    tone.start(now)
+    shimmer.start(now)
+    tone.stop(now + duration)
+    shimmer.stop(now + duration)
+    shimmer.onended = () => {
+      this.activeVoices = Math.max(0, this.activeVoices - 1)
+      tone.disconnect()
+      shimmer.disconnect()
+      filter.disconnect()
+      voiceGain.disconnect()
+    }
+  }
+
+  tick(canvasWidth) {
+    if (!this.audioContext || this.audioContext.state !== 'running') {
+      return
+    }
+
+    const now = performance.now()
+    const elapsed = now - this.lastTick
+    this.lastTick = now
+
+    this.pendingHits = this.pendingHits.filter((hit) => now - hit.at < 180)
+    this.noteTokens = Math.min(4, this.noteTokens + (elapsed / 1000) * this.maxNotesPerSecond)
+
+    while (this.noteTokens >= 1 && this.pendingHits.length > 0 && this.activeVoices < this.maxVoices) {
+      const hit = this.chooseHit()
+      if (!hit) {
+        break
+      }
+      this.playHit(hit, canvasWidth)
+      this.noteTokens -= 1
+    }
+  }
+
+  dispose() {
+    this.pendingHits = []
+    if (this.audioContext) {
+      void this.audioContext.close()
+    }
+    this.audioContext = null
+    this.masterGain = null
+    this.compressor = null
+  }
+}
+
+class HapticsEngine {
+  constructor() {
+    this.supported = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function'
+    this.tokens = 1
+    this.maxPerSecond = 10
+    this.lastTick = performance.now()
+    this.lastPulse = 0
+    this.minGapMs = 55
+  }
+
+  trigger(intensity) {
+    if (!this.supported) {
+      return
+    }
+
+    const now = performance.now()
+    const elapsed = now - this.lastTick
+    this.lastTick = now
+    this.tokens = Math.min(3, this.tokens + (elapsed / 1000) * this.maxPerSecond)
+
+    if (this.tokens < 1 || now - this.lastPulse < this.minGapMs) {
+      return
+    }
+
+    this.tokens -= 1
+    this.lastPulse = now
+
+    const clamped = Math.max(0.1, Math.min(1, intensity))
+    const duration = Math.round(6 + clamped * 14)
+    navigator.vibrate(duration)
+  }
+
+  dispose() {
+    if (this.supported) {
+      navigator.vibrate(0)
+    }
+  }
+}
+
+function collideBallWithPoint(ball, point, bounce) {
+  if (point.pinned) {
+    return
+  }
+
+  const dx = point.x - ball.x
+  const dy = point.y - ball.y
+  const distance = Math.hypot(dx, dy)
+  const minDistance = ball.r + point.r
+
+  if (distance <= 0 || distance >= minDistance) {
+    return
+  }
+
+  const nx = dx / distance
+  const ny = dy / distance
+  const overlap = minDistance - distance
+
+  const ballMass = ball.r * ball.r * 0.09
+  const pointMass = point.r * point.r * 0.45
+  const invBallMass = 1 / ballMass
+  const invPointMass = 1 / pointMass
+  const invSum = invBallMass + invPointMass
+
+  ball.x -= nx * overlap * (invBallMass / invSum)
+  ball.y -= ny * overlap * (invBallMass / invSum)
+  point.x += nx * overlap * (invPointMass / invSum)
+  point.y += ny * overlap * (invPointMass / invSum)
+
+  const pointVx = point.x - point.ox
+  const pointVy = point.y - point.oy
+  const relativeVx = ball.vx - pointVx
+  const relativeVy = ball.vy - pointVy
+  const relativeNormalVelocity = relativeVx * nx + relativeVy * ny
+
+  if (relativeNormalVelocity >= 0) {
+    return
+  }
+
+  const restitution = Math.min(0.86, Math.max(0.28, bounce * 0.9))
+  const impulse = (-(1 + restitution) * relativeNormalVelocity) / invSum
+
+  ball.vx += impulse * nx * invBallMass
+  ball.vy += impulse * ny * invBallMass
+
+  const nextPointVx = pointVx - impulse * nx * invPointMass
+  const nextPointVy = pointVy - impulse * ny * invPointMass
+  point.ox = point.x - nextPointVx
+  point.oy = point.y - nextPointVy
+}
+
+function solveBallRagdollCollisions(balls, ragdolls, bounce) {
+  for (const ragdoll of ragdolls) {
+    for (const point of ragdoll.points) {
+      for (const ball of balls) {
+        collideBallWithPoint(ball, point, bounce)
+      }
+    }
+  }
+}
 
 class Peg {
   constructor(x, y) {
@@ -84,6 +344,7 @@ class Ball {
         this.vx -= 2 * dot * nx * bounce
         this.vy -= 2 * dot * ny * bounce
         peg.flash = 8
+        sim.onPegHit?.(peg.x, Math.abs(dot) / 12)
       }
     }
   }
@@ -174,9 +435,11 @@ class Point {
         const nx = dx / distance
         const ny = dy / distance
         const push = minDistance - distance
+        const speed = Math.hypot(this.x - this.ox, this.y - this.oy)
         this.x += nx * push
         this.y += ny * push
         peg.flash = 8
+        sim.onPegHit?.(peg.x, speed / 9)
       }
     }
   }
@@ -473,6 +736,8 @@ function App() {
     let rainInterval = null
     const rainTimeouts = new Set()
     let animationFrameId = 0
+    const pegAudio = new PegAudioEngine()
+    const haptics = new HapticsEngine()
 
     const resize = () => {
       canvas.width = Math.min(window.innerWidth, 900)
@@ -481,7 +746,16 @@ function App() {
     }
 
     const pegs = []
-    const sim = { canvas, bounce, gravity, pegs }
+    const sim = {
+      canvas,
+      bounce,
+      gravity,
+      pegs,
+      onPegHit: (x, intensity) => {
+        pegAudio.registerHit(x, intensity)
+        haptics.trigger(intensity)
+      },
+    }
 
     const buildPegs = () => {
       pegs.length = 0
@@ -522,6 +796,7 @@ function App() {
     }
 
     const onDown = (event) => {
+      pegAudio.unlock()
       const { x, y } = canvasPos(event)
       for (const ragdoll of ragdolls) {
         const point = ragdoll.grab(x, y)
@@ -607,6 +882,7 @@ function App() {
     }
 
     const onRainClick = () => {
+      pegAudio.unlock()
       if (rainInterval) {
         clearInterval(rainInterval)
         rainInterval = null
@@ -628,6 +904,7 @@ function App() {
     }
 
     const onChaosClick = () => {
+      pegAudio.unlock()
       for (let i = 0; i < 20; i += 1) {
         const timeoutId = setTimeout(() => {
           addBall(
@@ -643,6 +920,7 @@ function App() {
     }
 
     const onClearClick = () => {
+      pegAudio.unlock()
       balls.length = 0
       ragdolls.length = 0
     }
@@ -755,7 +1033,6 @@ function App() {
 
       for (const ball of balls) {
         ball.update(sim)
-        ball.draw(ctx)
       }
 
       if (balls.length > 180) {
@@ -764,8 +1041,21 @@ function App() {
 
       for (const ragdoll of ragdolls) {
         ragdoll.update(sim)
+      }
+
+      for (let pass = 0; pass < 2; pass += 1) {
+        solveBallRagdollCollisions(balls, ragdolls, bounce)
+      }
+
+      for (const ball of balls) {
+        ball.draw(ctx)
+      }
+
+      for (const ragdoll of ragdolls) {
         ragdoll.draw(ctx)
       }
+
+      pegAudio.tick(canvas.width)
 
       if (activeDragPoint) {
         ctx.beginPath()
@@ -810,6 +1100,8 @@ function App() {
       for (const timeoutId of rainTimeouts) {
         clearTimeout(timeoutId)
       }
+      pegAudio.dispose()
+      haptics.dispose()
 
       window.removeEventListener('resize', onResize)
       canvas.removeEventListener('mousedown', onMouseDown)
