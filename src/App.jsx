@@ -344,7 +344,7 @@ class Ball {
         this.vx -= 2 * dot * nx * bounce
         this.vy -= 2 * dot * ny * bounce
         peg.flash = 8
-        sim.onPegHit?.(peg.x, Math.abs(dot) / 12)
+        sim.onPegHit?.(peg, Math.abs(dot) / 12)
       }
     }
   }
@@ -439,7 +439,7 @@ class Point {
         this.x += nx * push
         this.y += ny * push
         peg.flash = 8
-        sim.onPegHit?.(peg.x, speed / 9)
+        sim.onPegHit?.(peg, speed / 9)
       }
     }
   }
@@ -738,6 +738,7 @@ function App() {
     let animationFrameId = 0
     const pegAudio = new PegAudioEngine()
     const haptics = new HapticsEngine()
+    const pegSoundState = new WeakMap()
 
     const resize = () => {
       canvas.width = Math.min(window.innerWidth, 900)
@@ -751,8 +752,39 @@ function App() {
       bounce,
       gravity,
       pegs,
-      onPegHit: (x, intensity) => {
-        pegAudio.registerHit(x, intensity)
+      onPegHit: (peg, intensity) => {
+        const now = performance.now()
+        const clamped = Math.max(0, Math.min(1, intensity))
+        const state = pegSoundState.get(peg) ?? { lastAt: -1e9, streak: 0, suppressedUntil: 0 }
+
+        if (now < state.suppressedUntil) {
+          pegSoundState.set(peg, state)
+          return
+        }
+
+        const sinceLast = now - state.lastAt
+        const cooldownMs = 80 + (1 - clamped) * 180
+        if (sinceLast < cooldownMs) {
+          if (sinceLast < 120) {
+            state.streak += 1
+          } else {
+            state.streak = Math.max(0, state.streak - 1)
+          }
+
+          if (state.streak >= 6) {
+            state.suppressedUntil = now + 800
+            state.streak = 0
+          }
+
+          pegSoundState.set(peg, state)
+          return
+        }
+
+        state.lastAt = now
+        state.streak = 0
+        pegSoundState.set(peg, state)
+
+        pegAudio.registerHit(peg.x, clamped)
         haptics.trigger(intensity)
       },
     }
